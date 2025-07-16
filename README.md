@@ -55,8 +55,8 @@ Especially useful to use with the new Kimi-K2 moonshot model.
     GROQ_API_KEY="your-groq-api-key"
 
     # Optional: Model mappings for Claude Code aliases
-    BIG_MODEL="llama-3.3-70b-versatile"    # For 'sonnet' or 'opus' requests
-    SMALL_MODEL="llama-3.1-8b-instant" # For 'haiku' requests
+    BIG_MODEL="moonshotai/kimi-k2-instruct"    # For 'sonnet' or 'opus' requests
+    SMALL_MODEL="qwen/qwen3-32b" # For 'haiku' requests
     
     # Optional: Server settings
     HOST="0.0.0.0"
@@ -121,7 +121,6 @@ To ensure Claude Code's model requests are handled correctly by Groq:
 
 - Requests from Claude Code for model names containing **"haiku"** (e.g., `claude-3-haiku-20240307`) are mapped to the Groq model specified by your `SMALL_MODEL` environment variable (default: `qwen/qwen3-32b`).
 - Requests from Claude Code for model names containing **"sonnet"** or **"opus"** (e.g., `claude-3-sonnet-20240229`, `claude-3-opus-20240229`) are mapped to the Groq model specified by your `BIG_MODEL` environment variable (default: `moonshotai/kimi-k2-instruct`).
-- If Claude Code requests a full Groq model name (e.g., `groq/llama-3.3-70b-versatile`), the proxy will use that directly.
 
 The server maintains a list of known Groq models. If a recognized Groq model is requested by the client without the `groq/` prefix, the proxy will add it.
 
@@ -179,7 +178,7 @@ The server provides detailed logs, which are especially useful for understanding
 
 ## Performance Tips
 
-- **Model Selection**: Use `llama-3.1-8b-instant` for faster responses, `llama-3.3-70b-versatile` for more complex tasks
+- **Model Selection**: Use `moonshotai/kimi-k2-instruct` for everything, it's too good!
 - **Streaming**: Keep streaming enabled for better interactivity; the proxy handles errors automatically
 - **Timeouts**: Increase `REQUEST_TIMEOUT` for complex requests that need more processing time
 - **Retries**: Adjust `MAX_STREAMING_RETRIES` based on your network stability
