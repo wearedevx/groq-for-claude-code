@@ -56,12 +56,12 @@ class Constants:
 # Simple Configuration
 class Config:
     def __init__(self):
-        self.gemini_api_key = os.environ.get("GEMINI_API_KEY")
-        if not self.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY not found in environment variables")
+        self.groq_api_key = os.environ.get("GROQ_API_KEY")
+        if not self.groq_api_key:
+            raise ValueError("GROQ_API_KEY not found in environment variables")
         
-        self.big_model = os.environ.get("BIG_MODEL", "gemini-1.5-pro-latest")
-        self.small_model = os.environ.get("SMALL_MODEL", "gemini-1.5-flash-latest")
+        self.big_model = os.environ.get("BIG_MODEL", "moonshotai/kimi-k2-instruct")
+        self.small_model = os.environ.get("SMALL_MODEL", "qwen/qwen3-32b")
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8082"))
         self.log_level = os.environ.get("LOG_LEVEL", "WARNING")
@@ -77,12 +77,26 @@ class Config:
         self.emergency_disable_streaming = os.environ.get("EMERGENCY_DISABLE_STREAMING", "false").lower() == "true"
         
     def validate_api_key(self):
-        """Basic API key validation"""
-        if not self.gemini_api_key:
+        """Enhanced API key validation with helpful error messages"""
+        if not self.groq_api_key:
+            logger.error("❌ GROQ_API_KEY environment variable is not set")
+            logger.info("💡 Find your API key at: https://console.groq.com/keys")
+            logger.info("🔧 Set it with: export GROQ_API_KEY=gsk_... (or add to .env)")
             return False
-        # Basic format check for Google API keys
-        if not (self.gemini_api_key.startswith('AIza') and len(self.gemini_api_key) == 39):
+            
+        # Basic format check for Groq API keys (starts with gsk_)
+        if not self.groq_api_key.startswith('gsk_'):
+            logger.error("❌ API key format is invalid - must start with 'gsk_'")
+            logger.info("💡 Groq API keys start with 'gsk_' prefix")
+            logger.info("🔧 Example: gsk_4a5f...")
             return False
+            
+        if len(self.groq_api_key) < 40:
+            logger.error("❌ API key appears too short (under 40 characters)")
+            logger.info("💡 Valid Groq API keys are typically 40-50 characters long")
+            logger.info("🔧 Check for typos or incomplete key copy")
+            return False
+            
         return True
 
 try:
@@ -100,39 +114,38 @@ litellm.num_retries = config.max_retries
 class ModelManager:
     def __init__(self, config):
         self.config = config
-        self.base_gemini_models = [
-            "gemini-1.5-pro-latest",
-            "gemini-1.5-pro-preview-0514",
-            "gemini-1.5-flash-latest", 
-            "gemini-1.5-flash-preview-0514",
-            "gemini-pro",
-            "gemini-2.5-pro-preview-05-06",
-            "gemini-2.5-flash-preview-04-17",
-            "gemini-2.0-flash-exp",
-            "gemini-exp-1206"
+        self.base_groq_models = [
+            "moonshotai/kimi-k2-instruct",
+            "qwen/qwen3-32b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama-3.2-3b-preview",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+            "gemma-7b-it"
         ]
-        self._gemini_models = set(self.base_gemini_models)
+        self._groq_models = set(self.base_groq_models)
         self._add_env_models()
     
     def _add_env_models(self):
         for model in [self.config.big_model, self.config.small_model]:
-            if model.startswith("gemini") and model not in self._gemini_models:
-                self._gemini_models.add(model)
+            if model not in self._groq_models:
+                self._groq_models.add(model)
     
     @property
-    def gemini_models(self) -> List[str]:
-        return sorted(list(self._gemini_models))
+    def groq_models(self) -> List[str]:
+        return sorted(list(self._groq_models))
     
     def validate_and_map_model(self, original_model: str) -> tuple[str, bool]:
         clean_model = self._clean_model_name(original_model)
         mapped_model = self._map_model_alias(clean_model)
         
         if mapped_model != clean_model:
-            return f"gemini/{mapped_model}", True
-        elif clean_model in self._gemini_models:
-            return f"gemini/{clean_model}", True
-        elif not original_model.startswith('gemini/'):
-            return f"gemini/{original_model}", False
+            return f"groq/{mapped_model}", True
+        elif clean_model in self._groq_models:
+            return f"groq/{clean_model}", True
+        elif not original_model.startswith('groq/'):
+            return f"groq/{original_model}", False
         else:
             return original_model, False
     
@@ -143,6 +156,8 @@ class ModelManager:
             return model[10:]
         elif model.startswith('openai/'):
             return model[7:]
+        elif model.startswith('groq/'):
+            return model[5:]
         return model
     
     def _map_model_alias(self, clean_model: str) -> str:
@@ -183,35 +198,35 @@ root_logger.addFilter(SimpleMessageFilter())
 for uvicorn_logger in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
     logging.getLogger(uvicorn_logger).setLevel(logging.WARNING)
 
-app = FastAPI(title="Gemini-to-Claude API Proxy", version="2.5.0")
+app = FastAPI(title="Groq-to-Claude API Proxy", version="2.5.0")
 
-# Enhanced error classification
-def classify_gemini_error(error_msg: str) -> str:
-    """Provide specific error guidance for common Gemini issues."""
+# Enhanced error classification for Groq
+def classify_groq_error(error_msg: str) -> str:
+    """Provide specific error guidance for common Groq issues."""
     error_lower = error_msg.lower()
     
     # Streaming/parsing errors
     if "error parsing chunk" in error_lower and "expecting property name" in error_lower:
-        return "Gemini streaming parsing error (malformed JSON chunk). This is a known intermittent Gemini API issue. Please try again or disable streaming by setting stream=false."
+        return "Groq streaming parsing error (malformed JSON chunk). This is a known intermittent API issue. Please try again or disable streaming by setting stream=false."
     
     # Tool schema validation errors
     if "function_declarations" in error_lower and "format" in error_lower:
         if "only 'enum' and 'date-time' are supported" in error_lower:
-            return "Tool schema error: Gemini only supports 'enum' and 'date-time' formats for string parameters. Remove other format types like 'url', 'email', 'uri', etc."
+            return "Tool schema error: Groq only supports 'enum' and 'date-time' formats for string parameters. Remove other format types like 'url', 'email', 'uri', etc."
         else:
             return "Tool schema validation error. Check your tool parameter definitions for unsupported format types or properties."
     
     # Rate limiting
     elif "rate limit" in error_lower or "quota" in error_lower:
-        return "Rate limit or quota exceeded. Please wait a moment and try again. Check your Google Cloud Console for quota limits."
+        return "Rate limit or quota exceeded. Please wait a moment and try again. Check your Groq Console for quota limits."
     
     # Authentication issues
     elif "api key" in error_lower or "authentication" in error_lower or "unauthorized" in error_lower:
-        return "API key error. Please check that your GEMINI_API_KEY is valid and has the necessary permissions."
+        return "API key error. Please check that your GROQ_API_KEY is valid and has the necessary permissions."
     
     # Parsing/streaming issues
     elif "parsing" in error_lower or "json" in error_lower or "malformed" in error_lower:
-        return "Response parsing error. This is often a temporary Gemini API issue - please retry your request."
+        return "Response parsing error. This is often a temporary API issue - please retry your request."
     
     # Connection issues
     elif "connection" in error_lower or "timeout" in error_lower:
@@ -219,7 +234,7 @@ def classify_gemini_error(error_msg: str) -> str:
     
     # Safety/content filtering
     elif "safety" in error_lower or "content" in error_lower and "filter" in error_lower:
-        return "Content filtered by Gemini's safety systems. Please modify your request to comply with content policies."
+        return "Content filtered by Groq's safety systems. Please modify your request to comply with content policies."
     
     # Token/length issues
     elif "token" in error_lower and ("limit" in error_lower or "exceed" in error_lower):
@@ -229,10 +244,10 @@ def classify_gemini_error(error_msg: str) -> str:
     return error_msg
 
 # Enhanced schema cleaner
-def clean_gemini_schema(schema: Any) -> Any:
-    """Recursively removes unsupported fields from a JSON schema for Gemini compatibility."""
+def clean_groq_schema(schema: Any) -> Any:
+    """Recursively removes unsupported fields from a JSON schema for Groq compatibility."""
     if isinstance(schema, dict):
-        # Remove fields unsupported by Gemini
+        # Remove fields unsupported by Groq
         schema.pop("additionalProperties", None)
         schema.pop("default", None)
 
@@ -240,15 +255,15 @@ def clean_gemini_schema(schema: Any) -> Any:
         if schema.get("type") == "string" and "format" in schema:
             allowed_formats = {"enum", "date-time"}
             if schema["format"] not in allowed_formats:
-                logger.debug(f"Removing unsupported format '{schema['format']}' for string type in Gemini schema")
+                logger.debug(f"Removing unsupported format '{schema['format']}' for string type in Groq schema")
                 schema.pop("format")
 
         # Recursively clean nested schemas
         for key, value in list(schema.items()):
-            schema[key] = clean_gemini_schema(value)
+            schema[key] = clean_groq_schema(value)
                 
     elif isinstance(schema, list):
-        return [clean_gemini_schema(item) for item in schema]
+        return [clean_groq_schema(item) for item in schema]
             
     return schema
 
@@ -397,7 +412,7 @@ def parse_tool_result_content(content):
 
 # Enhanced message conversion
 def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str, Any]:
-    """Convert Anthropic API request format to LiteLLM format for Gemini."""
+    """Convert Anthropic API request format to LiteLLM format for Groq."""
     litellm_messages = []
     
     # System message handling
@@ -537,7 +552,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         valid_tools = []
         for tool in anthropic_request.tools:
             if tool.name and tool.name.strip():
-                cleaned_schema = clean_gemini_schema(tool.input_schema)
+                cleaned_schema = clean_groq_schema(tool.input_schema)
                 valid_tools.append({
                     "type": Constants.TOOL_FUNCTION,
                     Constants.TOOL_FUNCTION: {
@@ -564,12 +579,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         else:
             litellm_request["tool_choice"] = "auto"
 
-    # Add thinking configuration (Gemini specific)
-    if anthropic_request.thinking is not None:
-        if anthropic_request.thinking.enabled:
-            litellm_request["thinkingConfig"] = {"thinkingBudget": 24576}
-        else:
-            litellm_request["thinkingConfig"] = {"thinkingBudget": 0}
+    # Skip reasoning parameter entirely for all models
 
     # Add user metadata if provided
     if (anthropic_request.metadata and 
@@ -581,9 +591,9 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
 
 # Response conversion
 def convert_litellm_to_anthropic(litellm_response, original_request: MessagesRequest) -> MessagesResponse:
-    """Convert LiteLLM (Gemini) response back to Anthropic API format."""
+    """Convert LiteLLM (Groq) response back to Anthropic API format."""
     try:
-        # Extract response data safely
+        # Extract response data safely with enhanced model compatibility
         response_id = f"msg_{uuid.uuid4()}"
         content_text = ""
         tool_calls = None
@@ -591,88 +601,128 @@ def convert_litellm_to_anthropic(litellm_response, original_request: MessagesReq
         prompt_tokens = 0
         completion_tokens = 0
 
+        # Enhanced response format detection
+        def safe_get(obj, key, default=None):
+            """Safely get nested attributes or dict keys"""
+            if obj is None:
+                return default
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
         # Handle LiteLLM ModelResponse object format
         if hasattr(litellm_response, 'choices') and hasattr(litellm_response, 'usage'):
             choices = litellm_response.choices
-            message = choices[0].message if choices else None
-            content_text = getattr(message, 'content', "") or ""
-            tool_calls = getattr(message, 'tool_calls', None)
-            finish_reason = choices[0].finish_reason if choices else "stop"
-            response_id = getattr(litellm_response, 'id', response_id)
-            
-            if hasattr(litellm_response, 'usage'):
-                usage = litellm_response.usage
-                prompt_tokens = getattr(usage, "prompt_tokens", 0)
-                completion_tokens = getattr(usage, "completion_tokens", 0)
+            if choices and len(choices) > 0:
+                choice = choices[0]
+                message = choice.message if hasattr(choice, 'message') else None
+                if message:
+                    content_text = safe_get(message, 'content', '')
+                    tool_calls = safe_get(message, 'tool_calls', None)
+                finish_reason = safe_get(choice, 'finish_reason', 'stop')
+                response_id = safe_get(litellm_response, 'id', response_id)
                 
-        # Handle dictionary response format
+                usage = safe_get(litellm_response, 'usage', {})
+                if usage:
+                    prompt_tokens = safe_get(usage, 'prompt_tokens', 0)
+                    completion_tokens = safe_get(usage, 'completion_tokens', 0)
+                    
+        # Handle dictionary response format with enhanced safety
         elif isinstance(litellm_response, dict):
             choices = litellm_response.get("choices", [])
-            message = choices[0].get("message", {}) if choices else {}
-            content_text = message.get("content", "") or ""
-            tool_calls = message.get("tool_calls")
-            finish_reason = choices[0].get("finish_reason", "stop") if choices else "stop"
-            usage = litellm_response.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
-            response_id = litellm_response.get("id", response_id)
+            if choices and len(choices) > 0:
+                choice = choices[0]
+                message = choice.get("message", {}) if isinstance(choice, dict) else {}
+                content_text = safe_get(message, 'content', '')
+                tool_calls = safe_get(message, 'tool_calls')
+                finish_reason = safe_get(choice, 'finish_reason', 'stop')
+                
+                usage = litellm_response.get("usage", {})
+                prompt_tokens = safe_get(usage, 'prompt_tokens', 0)
+                completion_tokens = safe_get(usage, 'completion_tokens', 0)
+                response_id = litellm_response.get("id", response_id)
 
-        # Build content blocks
+        # Ensure content_text is string
+        if content_text is None:
+            content_text = ""
+        elif not isinstance(content_text, str):
+            content_text = str(content_text)
+
+        # Build content blocks with enhanced validation
         content_blocks = []
         
-        # Add text content if present
-        if content_text:
+        # Add text content if present and non-empty
+        if content_text and content_text.strip():
             content_blocks.append(ContentBlockText(type=Constants.CONTENT_TEXT, text=content_text))
 
-        # Process tool calls
+        # Enhanced tool call processing with better error handling
         if tool_calls:
             if not isinstance(tool_calls, list):
                 tool_calls = [tool_calls]
 
             for tool_call in tool_calls:
                 try:
-                    # Extract tool call data from different formats
+                    # Extract tool call data with defensive programming
+                    tool_id = None
+                    name = None
+                    arguments_str = "{}"
+                    
                     if isinstance(tool_call, dict):
-                        tool_id = tool_call.get("id", f"tool_{uuid.uuid4()}")
-                        function_data = tool_call.get(Constants.TOOL_FUNCTION, {})
-                        name = function_data.get("name", "")
-                        arguments_str = function_data.get("arguments", "{}")
+                        tool_id = safe_get(tool_call, 'id', f"tool_{uuid.uuid4()}")
+                        function_data = safe_get(tool_call, Constants.TOOL_FUNCTION, {})
+                        if isinstance(function_data, dict):
+                            name = safe_get(function_data, 'name', '')
+                            arguments_str = safe_get(function_data, 'arguments', "{}")
+                        else:
+                            name = safe_get(function_data, 'name', '')
+                            arguments_str = safe_get(function_data, 'arguments', "{}")
                     elif hasattr(tool_call, "id") and hasattr(tool_call, Constants.TOOL_FUNCTION):
                         tool_id = tool_call.id
-                        name = tool_call.function.name
-                        arguments_str = tool_call.function.arguments
+                        func_obj = getattr(tool_call, Constants.TOOL_FUNCTION)
+                        name = safe_get(func_obj, 'name', '')
+                        arguments_str = safe_get(func_obj, 'arguments', "{}")
                     else:
                         continue
 
-                    if not name:
+                    if not name or not isinstance(name, str) or not name.strip():
                         continue
 
-                    # Parse tool arguments safely
+                    # Parse tool arguments with fallback handling
                     try:
-                        arguments_dict = json.loads(arguments_str)
-                    except json.JSONDecodeError:
-                        arguments_dict = {"raw_arguments": arguments_str}
+                        if isinstance(arguments_str, str):
+                            arguments_dict = json.loads(arguments_str) if arguments_str.strip() else {}
+                        elif isinstance(arguments_str, dict):
+                            arguments_dict = arguments_str
+                        else:
+                            arguments_dict = {"raw_arguments": str(arguments_str)}
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.debug(f"JSON parsing failed for tool arguments: {e}")
+                        arguments_dict = {"raw_arguments": str(arguments_str)}
 
                     content_blocks.append(ContentBlockToolUse(
                         type=Constants.CONTENT_TOOL_USE,
-                        id=tool_id,
-                        name=name,
+                        id=str(tool_id),
+                        name=str(name).strip(),
                         input=arguments_dict
                     ))
                 except Exception as e:
                     logger.warning(f"Error processing tool call: {e}")
                     continue
 
-        # Ensure at least one content block
+        # Ensure at least one content block (empty text if needed)
         if not content_blocks:
-            content_blocks.append(ContentBlockText(type=Constants.CONTENT_TEXT, text=""))
+            content_blocks.append(ContentBlockText(type=Constants.CONTENT_TEXT, text=content_text or ""))
 
-        # Map finish reason to Anthropic format
-        if finish_reason == "length":
+        # Enhanced finish reason mapping with model compatibility
+        finish_reason_lower = str(finish_reason).lower() if finish_reason else "stop"
+        
+        if finish_reason_lower in ["length", "max_tokens"]:
             stop_reason = Constants.STOP_MAX_TOKENS
-        elif finish_reason == "tool_calls":
+        elif finish_reason_lower in ["tool_calls", "function_call", "tool_use"]:
             stop_reason = Constants.STOP_TOOL_USE
-        elif finish_reason is None and tool_calls:
+        elif finish_reason_lower in ["stop", "end"]:
+            stop_reason = Constants.STOP_END_TURN
+        elif tool_calls and len(content_blocks) > 1:
             stop_reason = Constants.STOP_TOOL_USE
         else:
             stop_reason = Constants.STOP_END_TURN
@@ -685,8 +735,8 @@ def convert_litellm_to_anthropic(litellm_response, original_request: MessagesReq
             stop_reason=stop_reason,
             stop_sequence=None,
             usage=Usage(
-                input_tokens=prompt_tokens,
-                output_tokens=completion_tokens
+                input_tokens=int(prompt_tokens) if isinstance(prompt_tokens, (int, float)) else 0,
+                output_tokens=int(completion_tokens) if isinstance(completion_tokens, (int, float)) else 0
             )
         )
         
@@ -696,7 +746,7 @@ def convert_litellm_to_anthropic(litellm_response, original_request: MessagesReq
             id=f"msg_error_{uuid.uuid4()}",
             model=original_request.original_model or original_request.model,
             role=Constants.ROLE_ASSISTANT, 
-            content=[ContentBlockText(type=Constants.CONTENT_TEXT, text="Response conversion error")],
+            content=[ContentBlockText(type=Constants.CONTENT_TEXT, text=f"Response conversion error: {str(e)[:100]}...")],
             stop_reason=Constants.STOP_ERROR,
             usage=Usage(input_tokens=0, output_tokens=0)
         )
@@ -965,14 +1015,14 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
                 if ("Error parsing chunk" in error_msg and 
                     "Expecting property name enclosed in double quotes" in error_msg):
                     
-                    logger.warning(f"Gemini malformed chunk error (attempt {consecutive_errors}/{max_consecutive_errors})")
+                    logger.warning(f"Groq malformed chunk error (attempt {consecutive_errors}/{max_consecutive_errors})")
                     
                     if consecutive_errors >= max_consecutive_errors:
                         logger.error(f"Too many consecutive API errors ({consecutive_errors}), terminating stream")
                         stream_terminated_early = True
                         
                         # Send error info to client
-                        error_text = f"\n⚠️ Gemini streaming encountered repeated malformed chunks. This is a known API issue.\n"
+                        error_text = f"\n⚠️ Groq streaming encountered repeated malformed chunks. This is a known API issue.\n"
                         yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': error_text}})}\n\n"
                         break
                     
@@ -1053,7 +1103,7 @@ async def create_message(request: MessagesRequest, raw_request: Request):
 
         # Convert request
         litellm_request = convert_anthropic_to_litellm(request)
-        litellm_request["api_key"] = config.gemini_api_key
+        litellm_request["api_key"] = config.groq_api_key
         
         # Log request details
         num_tools = len(request.tools) if request.tools else 0
@@ -1114,10 +1164,10 @@ async def create_message(request: MessagesRequest, raw_request: Request):
                         "Expecting property name enclosed in double quotes" in error_msg):
                         
                         if streaming_retry_count <= max_retries:
-                            logger.warning(f"Gemini streaming chunk parsing error (attempt {streaming_retry_count}/{max_retries + 1}), retrying...")
+                            logger.warning(f"Groq streaming chunk parsing error (attempt {streaming_retry_count}/{max_retries + 1}), retrying...")
                             continue
                         else:
-                            logger.error(f"Gemini streaming failed after {max_retries + 1} attempts due to malformed chunks, falling back to non-streaming")
+                            logger.error(f"Groq streaming failed after {max_retries + 1} attempts due to malformed chunks, falling back to non-streaming")
                             break
                     else:
                         # Other streaming errors - could be connection issues
@@ -1153,7 +1203,7 @@ async def create_message(request: MessagesRequest, raw_request: Request):
 
     except litellm.exceptions.APIError as e:
         logger.error(f"LiteLLM API Error: {e}")
-        error_msg = classify_gemini_error(str(e))
+        error_msg = classify_groq_error(str(e))
         raise HTTPException(status_code=getattr(e, 'status_code', 500), detail=error_msg)
     except ConnectionError as e:
         logger.error(f"Connection Error: {e}")
@@ -1163,7 +1213,7 @@ async def create_message(request: MessagesRequest, raw_request: Request):
         raise HTTPException(status_code=504, detail="Request timeout. Please try again.")
     except Exception as e:
         logger.error(f"Error processing request: {e}")
-        error_msg = classify_gemini_error(str(e))
+        error_msg = classify_groq_error(str(e))
         raise HTTPException(status_code=500, detail=error_msg)
 
 @app.post("/v1/messages/count_tokens")
@@ -1199,7 +1249,7 @@ async def count_tokens(request: TokenCountRequest, raw_request: Request):
 
     except Exception as e:
         logger.error(f"Error counting tokens: {str(e)}")
-        error_msg = classify_gemini_error(str(e))
+        error_msg = classify_groq_error(str(e))
         raise HTTPException(status_code=500, detail=f"Error counting tokens: {error_msg}")
 
 @app.get("/health")
@@ -1209,7 +1259,7 @@ async def health_check():
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "version": "2.5.0",
-            "gemini_api_configured": bool(config.gemini_api_key),
+            "groq_api_configured": bool(config.groq_api_key),
             "api_key_valid": config.validate_api_key(),
             "streaming_config": {
                 "force_disabled": config.force_disable_streaming,
@@ -1233,20 +1283,20 @@ async def health_check():
 
 @app.get("/test-connection")
 async def test_connection():
-    """Test API connectivity to Gemini"""
+    """Test API connectivity to Groq"""
     try:
         # Simple test request to verify API connectivity
         test_response = await litellm.acompletion(
-            model="gemini/gemini-1.5-flash-latest",
+            model="groq/llama-3.1-8b-instant",
             messages=[{"role": "user", "content": "Hello"}],
             max_tokens=5,
-            api_key=config.gemini_api_key
+            api_key=config.groq_api_key
         )
         
         return {
             "status": "success",
-            "message": "Successfully connected to Gemini API",
-            "model_used": "gemini-1.5-flash-latest",
+            "message": "Successfully connected to Groq API",
+            "model_used": "llama-3.1-8b-instant",
             "timestamp": datetime.now().isoformat(),
             "response_id": getattr(test_response, 'id', 'unknown')
         }
@@ -1258,10 +1308,10 @@ async def test_connection():
             content={
                 "status": "failed",
                 "error_type": "API Error",
-                "message": classify_gemini_error(str(e)),
+                "message": classify_groq_error(str(e)),
                 "timestamp": datetime.now().isoformat(),
                 "suggestions": [
-                    "Check your GEMINI_API_KEY is valid",
+                    "Check your GROQ_API_KEY is valid",
                     "Verify your API key has the necessary permissions",
                     "Check if you have reached rate limits"
                 ]
@@ -1274,7 +1324,7 @@ async def test_connection():
             content={
                 "status": "failed",
                 "error_type": "Connection Error", 
-                "message": classify_gemini_error(str(e)),
+                "message": classify_groq_error(str(e)),
                 "timestamp": datetime.now().isoformat(),
                 "suggestions": [
                     "Check your internet connection",
@@ -1287,14 +1337,14 @@ async def test_connection():
 @app.get("/")
 async def root():
     return {
-        "message": f"Enhanced Gemini-to-Claude API Proxy v2.5.0",
+        "message": f"Enhanced Groq-to-Claude API Proxy v2.5.0",
         "status": "running",
         "config": {
             "big_model": config.big_model,
             "small_model": config.small_model,
-            "available_models": model_manager.gemini_models[:5],
+            "available_models": model_manager.groq_models[:5],
             "max_tokens_limit": config.max_tokens_limit,
-            "api_key_configured": bool(config.gemini_api_key),
+            "api_key_configured": bool(config.groq_api_key),
             "streaming": {
                 "force_disabled": config.force_disable_streaming,
                 "emergency_disabled": config.emergency_disable_streaming,
@@ -1321,15 +1371,15 @@ class Colors:
     BOLD = "\033[1m"
 
 def log_request_beautifully(method: str, path: str, requested_model: str, 
-                           gemini_model_used: str, num_messages: int, 
+                           groq_model_used: str, num_messages: int, 
                            num_tools: int, status_code: int):
     if not sys.stdout.isatty():
-        print(f"{method} {path} - {requested_model} -> {gemini_model_used} ({num_messages} messages, {num_tools} tools)")
+        print(f"{method} {path} - {requested_model} -> {groq_model_used} ({num_messages} messages, {num_tools} tools)")
         return
     
     # Colorized logging for TTY
     req_display = f"{Colors.CYAN}{requested_model}{Colors.RESET}"
-    gemini_display = f"{Colors.GREEN}{gemini_model_used.replace('gemini/', '')}{Colors.RESET}"
+    groq_display = f"{Colors.GREEN}{groq_model_used.replace('groq/', '')}{Colors.RESET}"
     
     endpoint = path.split("?")[0] if "?" in path else path
     tools_str = f"{Colors.MAGENTA}{num_tools} tools{Colors.RESET}"
@@ -1341,7 +1391,7 @@ def log_request_beautifully(method: str, path: str, requested_model: str,
         status_str = f"{Colors.RED}✗ {status_code}{Colors.RESET}"
 
     log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
-    model_line = f"Request: {req_display} → Gemini: {gemini_display} ({tools_str}, {messages_str})"
+    model_line = f"Request: {req_display} → Groq: {groq_display} ({tools_str}, {messages_str})"
 
     print(log_line)
     print(model_line)
@@ -1352,8 +1402,8 @@ def validate_startup():
     print("🔍 Validating startup configuration...")
     
     # Check API key
-    if not config.gemini_api_key:
-        print("🔴 FATAL: GEMINI_API_KEY is not set")
+    if not config.groq_api_key:
+        print("🔴 FATAL: GROQ_API_KEY is not set")
         return False
     
     if not config.validate_api_key():
@@ -1371,16 +1421,16 @@ def validate_startup():
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--help":
-        print("Enhanced Gemini-to-Claude API Proxy v2.5.0")
+        print("Enhanced Groq-to-Claude API Proxy v2.5.0")
         print("")
         print("Usage: uvicorn server:app --reload --host 0.0.0.0 --port 8082")
         print("")
         print("Required environment variables:")
-        print("  GEMINI_API_KEY - Your Google Gemini API key")
+        print("  GROQ_API_KEY - Your Groq API key")
         print("")
         print("Optional environment variables:")
-        print(f"  BIG_MODEL - Big model name (default: gemini-1.5-pro-latest)")
-        print(f"  SMALL_MODEL - Small model name (default: gemini-1.5-flash-latest)")
+        print(f"  BIG_MODEL - Big model name (default: moonshotai/kimi-k2-instruct)")
+        print(f"  SMALL_MODEL - Small model name (default: qwen/qwen3-32b)")
         print(f"  HOST - Server host (default: 0.0.0.0)")
         print(f"  PORT - Server port (default: 8082)")
         print(f"  LOG_LEVEL - Logging level (default: WARNING)")
@@ -1391,8 +1441,8 @@ def main():
         print(f"  FORCE_DISABLE_STREAMING - Force disable streaming (default: false)")
         print(f"  EMERGENCY_DISABLE_STREAMING - Emergency disable streaming (default: false)")
         print("")
-        print("Available Gemini models:")
-        for model in model_manager.gemini_models:
+        print("Available Groq models:")
+        for model in model_manager.groq_models:
             print(f"  - {model}")
         sys.exit(0)
 
@@ -1401,21 +1451,26 @@ def main():
         print("🔴 Startup validation failed. Please check your configuration.")
         sys.exit(1)
 
-    # Configuration summary
-    print("🚀 Enhanced Gemini-to-Claude API Proxy v2.5.0")
-    print(f"✅ Configuration loaded successfully")
-    print(f"   Big Model: {config.big_model}")
-    print(f"   Small Model: {config.small_model}")
-    print(f"   Available Models: {len(model_manager.gemini_models)}")
-    print(f"   Max Tokens Limit: {config.max_tokens_limit}")
-    print(f"   Request Timeout: {config.request_timeout}s")
-    print(f"   Max Retries: {config.max_retries}")
-    print(f"   Max Streaming Retries: {config.max_streaming_retries}")
-    print(f"   Force Disable Streaming: {config.force_disable_streaming}")
-    print(f"   Emergency Disable Streaming: {config.emergency_disable_streaming}")
-    print(f"   Log Level: {config.log_level}")
-    print(f"   Server: {config.host}:{config.port}")
-    print("")
+    # Print clean startup summary
+    key_valid = config.validate_api_key()
+    key_status = "✅" if key_valid else "❌"
+    
+    # Simple config summary
+    print("═══════════════════════════════════════════════")
+    print("🚀 GROQ-TO-CLAUDE V1.0.0")
+    print("═══════════════════════════════════════════════")
+    print(f"API KEY    {key_status} {'*' * min(20, len(config.groq_api_key)) if config.groq_api_key else 'NOT SET'}")
+    print(f"BIG MODEL  {config.big_model}")
+    print(f"SMALL      {config.small_model}")
+    print(f"SERVER     {config.host}:{config.port}")
+    print(f"LOGS       {config.log_level}")
+    print(f"STREAMING  {'OFF' if config.force_disable_streaming or config.emergency_disable_streaming else 'ON'}")
+    print()
+    
+    if not key_valid:
+        print("💡 Set GROQ_API_KEY environment variable to start")
+        print("   Example: export GROQ_API_KEY=gsk_... (or set in .env)")
+        print()
 
     # Start server
     uvicorn.run(
